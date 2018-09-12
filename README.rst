@@ -104,11 +104,7 @@ repository and run this from the top level directory::
 this route.)
 
 If you don't want to change your system outside of cloning this
-repository (and installing dependencies), you can run the ``west``
-package as a module. In a Bash shell::
-
-  PYTHONPATH=/path/to/west/repository/src python3 -m west
-
-In a Windows command shell::
-
-  cmd /C "set PYTHONPATH=/path/to/west/repo && python3 -m west"
+repository (and installing dependencies), you can run the
+``src/west/main.py`` script directly. This script is the "real" West
+entry point, and is run by the wrapper. Only the ``init`` command is
+implemented by the wrapper itself.

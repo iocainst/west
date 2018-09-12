@@ -7,8 +7,8 @@
 
 import argparse
 import os
-import importlib
 import platform
+import shlex
 import subprocess
 import sys
 
@@ -37,7 +37,7 @@ WEST_REV_DEFAULT = 'master'
 # (The WEST_DIR name is not distinct enough to use when searching for
 # the top level; other directories named "west" may exist elsewhere,
 # e.g. zephyr/doc/west.)
-WEST_TOPDIR = '.west_topdir'
+WEST_MARKER = '.west_topdir'
 
 # Manifest repository directory under WEST_DIR.
 MANIFEST = 'manifest'
@@ -64,14 +64,13 @@ def find_west_topdir(start):
     '''Find the top-level installation directory, starting at ``start``.
 
     If none is found, raises WestNotFound.'''
-    # If you change this function, make sure to update west.util.west_topdir().
-    def is_west_dir(d):
-        return os.path.isdir(d) and '.west_topdir' in os.listdir(d)
 
-    cur_dir = os.getcwd()
+    # If you change this function, make sure to update west.util.west_topdir().
+
+    cur_dir = start
 
     while True:
-        if is_west_dir(os.path.join(cur_dir, 'west')):
+        if os.path.isfile(os.path.join(cur_dir, WEST_DIR, WEST_MARKER)):
             return cur_dir
 
         parent_dir = os.path.dirname(cur_dir)
@@ -83,18 +82,12 @@ def find_west_topdir(start):
 
 
 def clone(url, rev, dest):
-    def repository_type(url):
-        if url.startswith(('http:', 'https:', 'git:', 'git+ssh:', 'file:')):
-            return 'GIT'
-        else:
-            return 'UNKNOWN'
-
     if os.path.exists(dest):
-        msg = 'refusing to clone into existing location {}'.format(dest)
-        raise WestError(msg)
+        raise WestError('refusing to clone into existing location ' + dest)
 
-    if repository_type(url) == 'GIT':
-        subprocess.check_call(['git', 'clone', url, '-b', rev, dest])
+    if url.startswith(('http:', 'https:', 'git:', 'git+ssh:', 'file:')):
+        # Git repository
+        subprocess.check_call(('git', 'clone', url, '-b', rev, dest))
     else:
         raise WestError('Unknown URL scheme for repository: {}'.format(url))
 
@@ -104,7 +97,7 @@ def clone(url, rev, dest):
 #
 
 
-def init(argv):
+def init():
     '''Command line handler for ``west init`` invocations.
 
     This exits the program with a nonzero exit code if fatal errors occur.'''
@@ -132,7 +125,8 @@ def init(argv):
         'directory', nargs='?', default=None,
         help='Initializes in this directory, creating it if necessary')
 
-    args = init_parser.parse_args(args=argv)
+    # Strip bootstrap script and 'init' from argv
+    args = init_parser.parse_args(args=sys.argv[2:])
     directory = args.directory or os.getcwd()
 
     if args.base_url:
@@ -203,9 +197,10 @@ def init_bootstrap(directory, args):
     clone(args.manifest_url, args.manifest_rev,
           os.path.join(directory, WEST_DIR, MANIFEST))
 
-    # Mark the top level installation.
 
-    with open(os.path.join(directory, WEST_DIR, WEST_TOPDIR), 'w') as f:
+    # Create a dotfile to mark the installation. Hide it on Windows.
+
+    with open(os.path.join(directory, WEST_DIR, WEST_MARKER), 'w') as f:
         hide_file(f.name)
 
 
@@ -219,18 +214,27 @@ def init_reinit(directory, args):
 #
 
 
-def wrap(argv):
+def wrap():
     start = os.getcwd()
     try:
         topdir = find_west_topdir(start)
     except WestNotFound:
         sys.exit('Error: not a Zephyr directory (or any parent): {}\n'
                  'Use "west init" to install Zephyr here'.format(start))
-    # Put the top-level west source directory at the highest priority
-    # except for the script directory / current working directory.
-    sys.path.insert(1, os.path.join(topdir, WEST, 'src'))
-    main_module = importlib.import_module('west.main')
-    main_module.main(argv=argv)
+
+    # Replace the wrapper process with the "real" west
+
+    # sys.argv[1:] strips the argv[0] of the wrapper script itself
+    argv = [sys.executable,
+            os.path.join(topdir, WEST_DIR, WEST, 'src', 'west', 'main.py')] \
+           + sys.argv[1:]
+
+    try:
+        os.execv(sys.executable, argv)
+    except OSError as e:
+        sys.exit('Error: Failed to run the main West script from the wrapper, '
+                 "via '{}': {}"
+                 .format(' '.join(shlex.quote(s) for s in argv), e))
 
 
 #
@@ -238,16 +242,15 @@ def wrap(argv):
 #
 
 
-def main(wrap_argv=None):
+def main():
     '''Entry point to the wrapper script.'''
-    if wrap_argv is None:
-        wrap_argv = sys.argv[1:]
 
-    if not wrap_argv or wrap_argv[0] != 'init':
-        wrap(wrap_argv)
+    # Is the first argument (after the command name) 'init'?
+    if sys.argv[1:2] == ['init']:
+        init()
     else:
-        init(wrap_argv[1:])
-        sys.exit(0)
+        # Forward the arguments to the "main" West executable
+        wrap()
 
 
 if __name__ == '__main__':
